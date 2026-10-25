@@ -1,0 +1,57 @@
+name: seal-build
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      - name: Pack module zip
+        run: |
+          set -eo pipefail
+          # Copy the tree and drop .github (upstream ships none; this workflow
+          # is Seal's) so the zip carries exactly the module's own files.
+          mkdir -p "$RUNNER_TEMP/tree" "$RUNNER_TEMP/helper" build_output
+          cp -a src/. "$RUNNER_TEMP/tree/"
+          rm -rf "$RUNNER_TEMP/tree/.git" "$RUNNER_TEMP/tree/.github"
+          cat > "$RUNNER_TEMP/helper/create_mod.go" <<'GO'
+          package main
+
+          import (
+              "log"
+              "os"
+
+              "golang.org/x/mod/module"
+              "golang.org/x/mod/zip"
+          )
+
+          func main() {
+              m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+              f, err := os.Create(os.Args[4])
+              if err != nil {
+                  log.Fatal(err)
+              }
+              defer f.Close()
+              if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+                  log.Fatal(err)
+              }
+          }
+          GO
+          cd "$RUNNER_TEMP/helper"
+          go mod init example.com/helper
+          go get golang.org/x/mod@v0.14.0
+          go run create_mod.go github.com/Masterminds/goutils v1.1.0 "$RUNNER_TEMP/tree" "$GITHUB_WORKSPACE/build_output/v1.1.0.zip"
+          unzip -l "$GITHUB_WORKSPACE/build_output/v1.1.0.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: build_output/v1.1.0.zip
